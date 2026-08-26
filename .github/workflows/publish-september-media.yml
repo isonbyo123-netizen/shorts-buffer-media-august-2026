@@ -1,0 +1,39 @@
+name: Publish September Shorts Media
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "september_chunks/**"
+      - ".github/workflows/publish-september-media.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble and verify videos
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assembled
+          cat september_chunks/01_HSR_45/part_* > assembled/01_HSR_45_Do_These_First.mp4
+          cat september_chunks/02_ZZZ_Remielle_vs_Sigrid/part_* > assembled/02_ZZZ_Remielle_vs_Sigrid.mp4
+          cat september_chunks/03_ZZZ_Build_Sigrid/part_* > assembled/03_ZZZ_Build_Sigrid.mp4
+          cat september_chunks/04_Genshin_Ineffa/part_* > assembled/04_Genshin_Ineffa.mp4
+          echo "f1b2c38d1d332beca6c736668ae83f3dc0e150404ec0a6bef15af643288d7c70  assembled/01_HSR_45_Do_These_First.mp4" | sha256sum -c -
+          echo "a646bfdc3c862536d8fe36253eda0bd2d1fbd645c56a4a987cf99ec69a9591c3  assembled/02_ZZZ_Remielle_vs_Sigrid.mp4" | sha256sum -c -
+          echo "cf11d422fc567738ae4e7d328334f4d2d0eef4f429fbced4849f19cf92559b61  assembled/03_ZZZ_Build_Sigrid.mp4" | sha256sum -c -
+          echo "4464a2315ade6fea049cccf4d5503a0c3d18d3c1695fcc51f7cc9c28d82f8426  assembled/04_Genshin_Ineffa.mp4" | sha256sum -c -
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view september-2026-shorts >/dev/null 2>&1 || gh release create september-2026-shorts --title "September 1-6, 2026 Shorts Media" --notes "Public direct-download assets approved for the September 1-6, 2026 Buffer schedule."
+          gh release upload september-2026-shorts assembled/*.mp4 --clobber
