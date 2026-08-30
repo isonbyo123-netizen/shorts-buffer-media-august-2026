@@ -1,0 +1,35 @@
+name: Fetch Sep 3-4 update footage
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fetch-sep3-4-update-footage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install downloader
+        run: python -m pip install --upgrade yt-dlp
+      - name: Download official 1080p sources
+        run: |
+          mkdir -p footage
+          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/01_genshin_7_0_trailer.%(ext)s" "https://www.youtube.com/watch?v=QgLZe9BtRJE"
+          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/02_wriothesley_demo.%(ext)s" "https://www.youtube.com/watch?v=kdQOis0VRoo"
+          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/03_hsr_4_5_trailer.%(ext)s" "https://www.youtube.com/watch?v=hTIdycp-c9Y"
+          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/04_robin_summeretto_trailer.%(ext)s" "https://www.youtube.com/watch?v=hpqKHn0yS7I"
+      - name: Verify files
+        run: |
+          ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sep3-4-update-footage
+          path: footage/*.mp4
+          retention-days: 7
+          compression-level: 0
