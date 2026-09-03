@@ -1,4 +1,4 @@
-name: Fetch Sep 3-4 update footage
+name: Fetch HSR 4.5 daily short footage
 
 on:
   push:
@@ -15,21 +15,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install downloader
-        run: python -m pip install --upgrade yt-dlp
-      - name: Download official 1080p sources
+      - name: Install official downloader
+        run: |
+          curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
+          chmod +x /tmp/yt-dlp
+      - name: Download official Version 4.5 trailer
         run: |
           mkdir -p footage
-          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/01_genshin_7_0_trailer.%(ext)s" "https://www.youtube.com/watch?v=QgLZe9BtRJE"
-          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/02_wriothesley_demo.%(ext)s" "https://www.youtube.com/watch?v=kdQOis0VRoo"
-          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/03_hsr_4_5_trailer.%(ext)s" "https://www.youtube.com/watch?v=hTIdycp-c9Y"
-          yt-dlp --no-playlist --merge-output-format mp4 -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/04_robin_summeretto_trailer.%(ext)s" "https://www.youtube.com/watch?v=hpqKHn0yS7I"
-      - name: Verify files
+          /tmp/yt-dlp --no-playlist -f 399 -o "footage/01_hsr_4_5_trailer.mp4" "https://www.youtube.com/watch?v=hTIdycp-c9Y"
+      - name: Download official Robin Summeretto trailer
         run: |
-          ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*.mp4
+          /tmp/yt-dlp --no-playlist -f 399 -o "footage/02_robin_summeretto.mp4" "https://www.youtube.com/watch?v=hpqKHn0yS7I"
+      - name: Download official program UI and event sections
+        continue-on-error: true
+        run: |
+          /tmp/yt-dlp --no-playlist --download-sections "*31:28-32:02" --download-sections "*34:25-39:25" --force-keyframes-at-cuts -f 399 -o "footage/03_program_%(section_number)02d.mp4" "https://www.youtube.com/watch?v=xpZoM9t7KRA"
+      - name: Verify files
+        run: ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*.mp4
       - uses: actions/upload-artifact@v4
         with:
-          name: sep3-4-update-footage
+          name: hsr45-sep7-footage
           path: footage/*.mp4
           retention-days: 7
           compression-level: 0
