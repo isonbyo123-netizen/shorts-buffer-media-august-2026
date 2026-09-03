@@ -1,0 +1,25 @@
+name: Upload corrected Robin short
+on:
+  push:
+    branches:
+      - buffer-upload-robin-20260907
+    paths:
+      - '.upload-staging/robin20260907/**'
+      - '.github/workflows/upload-robin-20260907.yml'
+permissions:
+  contents: write
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble and verify
+        shell: bash
+        run: |
+          mkdir -p dist
+          find .upload-staging/robin20260907 -type f -name 'chunk-*' -print0 | sort -z | xargs -0 cat > dist/2026-09-07_Robin_Summeretto_Kit_iPhone.mp4
+          echo "a714b7330a9fdacac8ea9de009da5b79ff03463a0e05302196e6bddde93420d2  dist/2026-09-07_Robin_Summeretto_Kit_iPhone.mp4" | sha256sum -c -
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload september-2026-shorts dist/2026-09-07_Robin_Summeretto_Kit_iPhone.mp4 --clobber
