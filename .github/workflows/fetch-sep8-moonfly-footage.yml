@@ -1,0 +1,33 @@
+name: Fetch September 8 Moonfly footage
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fetch-sep8-moonfly-footage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install downloader
+        run: |
+          curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
+          chmod +x /tmp/yt-dlp
+      - name: Download clean Radiant Moonfly gameplay
+        run: |
+          mkdir -p footage
+          /tmp/yt-dlp --no-playlist -f "399/bv*[height=1080]/bestvideo[height<=1080]" -o "footage/radiant_moonfly_no_commentary.%(ext)s" "https://www.youtube.com/watch?v=O6X890D3nMs"
+      - name: Verify source
+        run: ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sep8-radiant-moonfly-footage
+          path: footage/*
+          retention-days: 7
+          compression-level: 0
