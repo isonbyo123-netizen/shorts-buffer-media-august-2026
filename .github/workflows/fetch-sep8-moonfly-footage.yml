@@ -19,10 +19,10 @@ jobs:
         run: |
           curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
           chmod +x /tmp/yt-dlp
-      - name: Download clean Radiant Moonfly gameplay
+      - name: Download official Radiant Moonfly gameplay
         run: |
           mkdir -p footage
-          /tmp/yt-dlp --no-playlist -f "399/bv*[height=1080]/bestvideo[height<=1080]" -o "footage/radiant_moonfly_no_commentary.%(ext)s" "https://www.youtube.com/watch?v=O6X890D3nMs"
+          /tmp/yt-dlp --js-runtimes node --no-playlist -f "399/bv*[height=1080]/bestvideo[height<=1080]" -o "footage/radiant_moonfly_official.%(ext)s" "https://www.youtube.com/watch?v=EiWT2QuzmIY"
       - name: Verify source
         run: ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*
       - uses: actions/upload-artifact@v4
