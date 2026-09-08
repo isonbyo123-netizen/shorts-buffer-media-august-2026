@@ -26,18 +26,10 @@ jobs:
           mkdir -p footage
           /tmp/yt-dlp --no-playlist -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "footage/01_zzz32_teaser.%(ext)s" "https://x.com/ZZZ_EN/status/2093310125318562233"
           /tmp/yt-dlp --no-playlist -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "footage/02_claret_demo.%(ext)s" "https://x.com/ZZZ_EN/status/2095723527446118412"
-      - name: Strip source audio and verify
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in footage/*; do
-            ffmpeg -y -i "$f" -an -c:v copy "${f%.*}_silent.mp4"
-            rm "$f"
-          done
-          ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*.mp4
+          ls -lh footage
       - uses: actions/upload-artifact@v4
         with:
           name: sep9-10-zzz32-footage
-          path: footage/*.mp4
+          path: footage/*
           retention-days: 7
           compression-level: 0
