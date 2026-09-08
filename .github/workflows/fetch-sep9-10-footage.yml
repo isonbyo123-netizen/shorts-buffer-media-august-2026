@@ -19,31 +19,25 @@ jobs:
         run: |
           curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
           chmod +x /tmp/yt-dlp
-      - name: Download official ZZZ sources with embedded clients
+      - name: Download official ZZZ videos from official X posts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p footage
-          fetch_video() {
-            local id="$1"
-            local out="$2"
-            for client in web_embedded tv_embedded web_safari android_vr; do
-              rm -f "footage/${out}".*
-              if /tmp/yt-dlp --js-runtimes node --no-playlist --extractor-args "youtube:player_client=${client}" -f "bv*[height<=1080]/bestvideo[height<=1080]" -o "footage/${out}.%(ext)s" "https://www.youtube.com/watch?v=${id}"; then
-                return 0
-              fi
-            done
-            return 1
-          }
-          fetch_video "4O-Iq8lj9_k" "01_zzz32_teaser"
-          fetch_video "kdGJDZb6mWk" "02_zzz32_program"
-          fetch_video "VjNhciBWgug" "03_claret_demo"
-          fetch_video "Ln0ilmPqXU0" "04_claret_ep"
-      - name: Verify sources
-        run: ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*
+          /tmp/yt-dlp --no-playlist -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "footage/01_zzz32_teaser.%(ext)s" "https://x.com/ZZZ_EN/status/2093310125318562233"
+          /tmp/yt-dlp --no-playlist -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "footage/02_claret_demo.%(ext)s" "https://x.com/ZZZ_EN/status/2095723527446118412"
+      - name: Strip source audio and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in footage/*; do
+            ffmpeg -y -i "$f" -an -c:v copy "${f%.*}_silent.mp4"
+            rm "$f"
+          done
+          ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*.mp4
       - uses: actions/upload-artifact@v4
         with:
           name: sep9-10-zzz32-footage
-          path: footage/*
+          path: footage/*.mp4
           retention-days: 7
           compression-level: 0
