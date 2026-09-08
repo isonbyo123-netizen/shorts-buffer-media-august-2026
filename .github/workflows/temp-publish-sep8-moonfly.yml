@@ -1,6 +1,10 @@
 name: One-time publish September 8 Radiant Moonfly Short
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temp-publish-sep8-moonfly.yml"
   workflow_dispatch:
 
 permissions:
