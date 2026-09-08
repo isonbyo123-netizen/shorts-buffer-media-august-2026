@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/temp-publish-sep8-moonfly.yml"
+      - "september_chunks/05_Genshin_Radiant_Moonfly_Act10/**"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p assembled
-          cat september_chunks/05_Genshin_Radiant_Moonfly_Act10/part_* > assembled/2026-09-08_Radiant_Moonfly_Act10_iPhone.mp4
+          cat september_chunks/05_Genshin_Radiant_Moonfly_Act10/part_??? > assembled/2026-09-08_Radiant_Moonfly_Act10_iPhone.mp4
           echo "a3425d1193239360b84793a6d9c5cc588c04678ca2f1861ae4c58111f0e7a90f  assembled/2026-09-08_Radiant_Moonfly_Act10_iPhone.mp4" | sha256sum -c -
       - name: Publish only the approved September 8 asset
         env:
