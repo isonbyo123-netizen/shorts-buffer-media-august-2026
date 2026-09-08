@@ -1,0 +1,37 @@
+name: Fetch September 9-10 ZZZ footage
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fetch-sep9-10-footage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install downloader
+        run: |
+          curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
+          chmod +x /tmp/yt-dlp
+      - name: Download official ZZZ 3.2 sources
+        run: |
+          set -euo pipefail
+          mkdir -p footage
+          /tmp/yt-dlp --js-runtimes node --no-playlist -f "bv*[height<=1080]/bestvideo[height<=1080]" -o "footage/01_zzz32_teaser.%(ext)s" "https://www.youtube.com/watch?v=4O-Iq8lj9_k"
+          /tmp/yt-dlp --js-runtimes node --no-playlist -f "bv*[height<=1080]/bestvideo[height<=1080]" -o "footage/02_zzz32_program.%(ext)s" "https://www.youtube.com/watch?v=kdGJDZb6mWk"
+          /tmp/yt-dlp --js-runtimes node --no-playlist -f "bv*[height<=1080]/bestvideo[height<=1080]" -o "footage/03_claret_demo.%(ext)s" "https://www.youtube.com/watch?v=VjNhciBWgug"
+          /tmp/yt-dlp --js-runtimes node --no-playlist -f "bv*[height<=1080]/bestvideo[height<=1080]" -o "footage/04_claret_ep.%(ext)s" "https://www.youtube.com/watch?v=Ln0ilmPqXU0"
+      - name: Verify sources
+        run: ffprobe -v error -show_entries format=filename,duration,size -of csv=p=0 footage/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sep9-10-zzz32-footage
+          path: footage/*
+          retention-days: 7
+          compression-level: 0
