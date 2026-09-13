@@ -15,25 +15,115 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install yt-dlp and ffmpeg
+
+      - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg jq
+          python -m pip install --quiet requests
           curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
           chmod +x /tmp/yt-dlp
-      - name: Download official Genshin 7.1 sources
+
+      - name: Resolve official Bilibili video IDs
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p footage
-          common=(--no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 --merge-output-format mp4 --extractor-args "youtube:player_client=android,web")
-          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/01_genshin_7_1_special_program.%(ext)s" "https://www.youtube.com/watch?v=fSwBYIeAieo"
-          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/02_genshin_7_1_trailer.%(ext)s" "https://www.youtube.com/watch?v=EwWbahV3qmU"
-          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/03_genshin_7_1_events_overview.%(ext)s" "https://www.youtube.com/watch?v=JbrNt_gewBI"
-          ls -lh footage
+          mkdir -p footage metadata
+          python - <<'PY'
+          import json, re, requests, sys
+          from urllib.parse import quote
+
+          headers = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36',
+              'Referer': 'https://www.bilibili.com/'
+          }
+
+          wanted = {
+              'pv': ['7.1版本PV', '往冥府的安魂歌'],
+              'program': ['7.1版本', '前瞻特别节目'],
+          }
+          found = {}
+
+          # First try Bilibili's public popular list; both official 7.1 uploads are currently trending.
+          for pn in range(1, 4):
+              try:
+                  r = requests.get('https://api.bilibili.com/x/web-interface/popular', params={'pn':pn,'ps':50}, headers=headers, timeout=20)
+                  print('popular', pn, r.status_code)
+                  data = r.json()
+                  for v in data.get('data',{}).get('list',[]):
+                      title = re.sub('<.*?>','', v.get('title',''))
+                      owner = (v.get('owner') or {}).get('name','')
+                      bvid = v.get('bvid')
+                      print('CANDIDATE', owner, bvid, title)
+                      if owner == '原神' and bvid:
+                          for key, needles in wanted.items():
+                              if key not in found and all(n in title for n in needles):
+                                  found[key] = {'bvid': bvid, 'title': title, 'owner': owner}
+              except Exception as e:
+                  print('popular error', repr(e))
+
+          # Fallback to Bilibili search API for anything not found.
+          queries = {
+              'pv':'《原神》7.1版本PV 往冥府的安魂歌',
+              'program':'《原神》7.1版本 往冥府的安魂歌 前瞻特别节目'
+          }
+          for key, q in queries.items():
+              if key in found:
+                  continue
+              try:
+                  r = requests.get('https://api.bilibili.com/x/web-interface/search/type', params={'search_type':'video','keyword':q,'page':1}, headers=headers, timeout=20)
+                  print('search', key, r.status_code)
+                  data = r.json()
+                  for v in data.get('data',{}).get('result',[]) or []:
+                      title = re.sub('<.*?>','', v.get('title',''))
+                      owner = v.get('author','')
+                      bvid = v.get('bvid')
+                      print('SEARCH_RESULT', owner, bvid, title)
+                      if bvid and owner == '原神' and all(n in title for n in wanted[key]):
+                          found[key] = {'bvid': bvid, 'title': title, 'owner': owner}
+                          break
+              except Exception as e:
+                  print('search error', key, repr(e))
+
+          print('FOUND', json.dumps(found, ensure_ascii=False, indent=2))
+          with open('metadata/resolved.json','w',encoding='utf-8') as f:
+              json.dump(found,f,ensure_ascii=False,indent=2)
+          if not all(k in found for k in wanted):
+              sys.exit('Could not resolve both official 7.1 Bilibili uploads')
+          PY
+
+      - name: Download official footage
+        shell: bash
+        run: |
+          set -euo pipefail
+          PV=$(jq -r '.pv.bvid' metadata/resolved.json)
+          PROGRAM=$(jq -r '.program.bvid' metadata/resolved.json)
+          echo "PV=$PV PROGRAM=$PROGRAM"
+
+          # Trailer at the best public quality up to 1080p.
+          /tmp/yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
+            --merge-output-format mp4 --write-info-json \
+            -f "bv*[height<=1080]+ba/b[height<=1080]/best" \
+            -o "footage/01_genshin_7_1_pv.%(ext)s" "https://www.bilibili.com/video/$PV"
+
+          # Full Special Program at up to 720p: enough for vertical crops and much smaller than 1080p.
+          /tmp/yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
+            --merge-output-format mp4 --write-info-json \
+            -f "bv*[height<=720]+ba/b[height<=720]/best" \
+            -o "footage/02_genshin_7_1_special_program.%(ext)s" "https://www.bilibili.com/video/$PROGRAM"
+
+          # Build a visual index of the program so we can identify the exact character/reward sections quickly.
+          PROGRAM_FILE=$(find footage -maxdepth 1 -type f -name '02_genshin_7_1_special_program.*' ! -name '*.json' | head -1)
+          ffmpeg -hide_banner -loglevel error -y -i "$PROGRAM_FILE" \
+            -vf "fps=1/30,scale=320:-2,tile=5x6" -q:v 3 metadata/program_contact_%02d.jpg
+          ls -lh footage metadata
+
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: genshin-7-1-official-footage
-          path: footage/*
+          path: |
+            footage/*
+            metadata/*
           retention-days: 7
           compression-level: 0
