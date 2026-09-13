@@ -15,132 +15,59 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           python -m pip install --quiet requests
-
-      - name: Resolve and download official Bilibili videos through API
+      - name: Download exact official sources
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p footage metadata
           python - <<'PY'
-          import json, re, requests, sys, subprocess, os, uuid
-
-          s = requests.Session()
+          import json, requests, subprocess, os, uuid
+          s=requests.Session()
           s.cookies.set('buvid3', str(uuid.uuid4()).upper()+'infoc')
-          s.headers.update({
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36',
-              'Referer': 'https://www.bilibili.com/',
-              'Accept': '*/*'
-          })
-
-          wanted = {
-              'pv': ['7.1版本PV', '往冥府的安魂歌'],
-              'program': ['7.1版本', '前瞻特别节目'],
+          s.headers.update({'User-Agent':'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36','Referer':'https://www.bilibili.com/','Accept':'*/*'})
+          items={
+            'pv': {'bvid':'BV1yuY96rEL7','cid':41822257268,'out':'footage/01_genshin_7_1_pv_en','qn':64},
+            'program': {'bvid':'BV1znY96NEvn','cid':41822653754,'out':'footage/02_genshin_7_1_special_program','qn':32}
           }
-          found = {}
-
-          for pn in range(1, 4):
-              r = s.get('https://api.bilibili.com/x/web-interface/popular', params={'pn':pn,'ps':50}, timeout=20)
-              r.raise_for_status()
-              for v in r.json().get('data',{}).get('list',[]):
-                  title = re.sub('<.*?>','', v.get('title',''))
-                  owner = (v.get('owner') or {}).get('name','')
-                  bvid = v.get('bvid')
-                  if owner == '原神' and bvid:
-                      for key, needles in wanted.items():
-                          if key not in found and all(n in title for n in needles):
-                              found[key] = {
-                                  'bvid': bvid,
-                                  'cid': v.get('cid'),
-                                  'aid': v.get('aid'),
-                                  'title': title,
-                                  'owner': owner,
-                                  'duration': v.get('duration')
-                              }
-
-          print('FOUND', json.dumps(found, ensure_ascii=False, indent=2))
-          if not all(k in found and found[k].get('cid') for k in wanted):
-              sys.exit('Official videos found, but CID missing from popular feed')
-
-          def download_public_mp4(item, outbase, qn):
-              bvid, cid = item['bvid'], item['cid']
-              params = {
-                  'bvid': bvid,
-                  'cid': cid,
-                  'qn': qn,
-                  'fnval': 0,
-                  'fnver': 0,
-                  'fourk': 0,
-                  'platform': 'html5',
-                  'high_quality': 1,
-              }
-              hosts = [
-                  'https://api.bilibili.com/x/player/playurl',
-                  'https://api.bilibili.com/x/player/wbi/playurl'
-              ]
-              data = None
-              errors=[]
-              for host in hosts:
-                  try:
-                      r = s.get(host, params=params, timeout=20)
-                      print('playurl', host, bvid, r.status_code, r.text[:300])
-                      if r.status_code != 200:
-                          errors.append((host,r.status_code))
-                          continue
-                      candidate=r.json()
-                      if candidate.get('code') == 0 and candidate.get('data',{}).get('durl'):
-                          data=candidate
-                          break
-                  except Exception as e:
-                      errors.append((host,repr(e)))
-              if data is None:
-                  raise RuntimeError('No playable URL: '+repr(errors))
-              durls = data['data']['durl']
-              parts=[]
-              for i, entry in enumerate(durls):
-                  urls=[entry['url']]+entry.get('backup_url',[])
-                  part = f'{outbase}_part{i:02d}.media'
-                  ok=False
-                  for url in urls:
-                      try:
-                          with s.get(url, headers={'Referer':'https://www.bilibili.com/'}, stream=True, timeout=90) as vr:
-                              print('video', i, vr.status_code, vr.headers.get('content-type'), vr.headers.get('content-length'))
-                              if vr.status_code not in (200,206):
-                                  continue
-                              with open(part,'wb') as f:
-                                  for chunk in vr.iter_content(1024*1024):
-                                      if chunk: f.write(chunk)
-                              ok=True
-                              break
-                      except Exception as e:
-                          print('cdn error',repr(e))
-                  if not ok:
-                      raise RuntimeError('All CDN URLs failed for part '+str(i))
-                  parts.append(part)
-              concat = f'{outbase}_concat.txt'
-              with open(concat,'w') as f:
-                  for p in parts:
-                      f.write("file '%s'\n" % os.path.abspath(p).replace("'", "'\\''"))
-              subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',concat,'-c','copy',outbase+'.mp4'],check=True)
-              return {'bvid':bvid,'cid':cid,'parts':len(parts),'quality':data['data'].get('quality'),'format':data['data'].get('format')}
-
           meta={}
-          meta['pv']=download_public_mp4(found['pv'],'footage/01_genshin_7_1_pv',64)
-          meta['program']=download_public_mp4(found['program'],'footage/02_genshin_7_1_special_program',64)
-          with open('metadata/resolved.json','w',encoding='utf-8') as f:
-              json.dump({'found':found,'download':meta},f,ensure_ascii=False,indent=2)
+          for key,x in items.items():
+            p={'bvid':x['bvid'],'cid':x['cid'],'qn':x['qn'],'fnval':0,'fnver':0,'fourk':0,'platform':'html5','high_quality':1}
+            r=s.get('https://api.bilibili.com/x/player/playurl',params=p,timeout=30)
+            print(key,'playurl',r.status_code,r.text[:500])
+            r.raise_for_status(); data=r.json()
+            if data.get('code')!=0 or not data.get('data',{}).get('durl'):
+              raise RuntimeError(data)
+            parts=[]
+            for i,e in enumerate(data['data']['durl']):
+              urls=[e['url']]+e.get('backup_url',[])
+              part=f"{x['out']}_part{i:02d}.media"
+              for url in urls:
+                try:
+                  vr=s.get(url,headers={'Referer':'https://www.bilibili.com/'},stream=True,timeout=120)
+                  print(key,'cdn',i,vr.status_code,vr.headers.get('content-length'),vr.headers.get('content-type'))
+                  if vr.status_code not in (200,206): continue
+                  with open(part,'wb') as f:
+                    for chunk in vr.iter_content(1024*1024):
+                      if chunk: f.write(chunk)
+                  break
+                except Exception as ex: print('cdn error',repr(ex))
+              else: raise RuntimeError('all cdn urls failed')
+              parts.append(part)
+            concat=x['out']+'_concat.txt'
+            with open(concat,'w') as f:
+              for pth in parts: f.write("file '%s'\n"%os.path.abspath(pth))
+            subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',concat,'-c','copy',x['out']+'.mp4'],check=True)
+            meta[key]={'bvid':x['bvid'],'cid':x['cid'],'quality':data['data'].get('quality'),'format':data['data'].get('format')}
+          with open('metadata/resolved.json','w') as f: json.dump(meta,f,indent=2)
           PY
-
           rm -f footage/*_part*.media footage/*_concat.txt
-          ffmpeg -hide_banner -loglevel error -y -i footage/02_genshin_7_1_special_program.mp4 \
-            -vf "fps=1/30,scale=320:-2,tile=5x6" -q:v 3 metadata/program_contact_%02d.jpg
+          ffmpeg -hide_banner -loglevel error -y -i footage/02_genshin_7_1_special_program.mp4 -vf "fps=1/30,scale=320:-2,tile=5x6" -q:v 3 metadata/program_contact_%02d.jpg
           ls -lh footage metadata
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:
