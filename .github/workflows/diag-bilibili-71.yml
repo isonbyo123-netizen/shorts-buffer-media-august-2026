@@ -1,0 +1,23 @@
+name: Probe Bilibili 7.1 endpoints
+on:
+  push:
+    paths:
+      - ".github/workflows/diag-bilibili-71.yml"
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public endpoints
+        shell: bash
+        run: |
+          set -x
+          UA='Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36'
+          for BV in BV1yuY96rEL7 BV1znY96NEvn; do
+            echo "===== $BV pagelist ====="
+            curl -sS -D - -A "$UA" -e 'https://www.bilibili.com/' "https://api.bilibili.com/x/player/pagelist?bvid=$BV&jsonp=jsonp" | head -c 4000 || true
+            echo
+            echo "===== $BV view/conclusion ====="
+            curl -sS -D - -A "$UA" -e 'https://www.bilibili.com/' "https://api.bilibili.com/x/web-interface/view/conclusion/get?bvid=$BV" | head -c 1000 || true
+            echo
+          done
