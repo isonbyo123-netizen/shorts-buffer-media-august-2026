@@ -16,71 +16,72 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yt-dlp and ffmpeg
+      - name: Install yt-dlp, ffmpeg and Tor
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg tor
           python -m pip install --upgrade --quiet "yt-dlp[default,curl-cffi]"
+          sudo service tor start
+          sleep 8
           yt-dlp --version
+          curl --socks5-hostname 127.0.0.1:9050 -fsS https://check.torproject.org/api/ip | tee /tmp/tor.json
 
-      - name: Find latest official Genshin Twitch broadcasts
+      - name: Download official Genshin 7.1 YouTube footage with yt-dlp
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           mkdir -p footage metadata
-          URL='https://www.twitch.tv/genshinimpactofficial/videos?filter=archives&sort=time'
-          yt-dlp --flat-playlist --playlist-end 20 \
-            --print '%(id)s\t%(title)s\t%(webpage_url)s' "$URL" | tee metadata/twitch_vods.txt
 
-      - name: Download Version 7.1 Special Program from official Twitch
-        shell: bash
-        run: |
-          set -euo pipefail
-          VOD_ID=$(awk -F '\t' 'BEGIN{IGNORECASE=1} /7\.1|Rekviem|Underworld|Special Program/{print $1; exit}' metadata/twitch_vods.txt || true)
-          if [ -z "$VOD_ID" ]; then
-            echo 'No title match found; using newest archive from official Genshin Twitch channel.'
-            VOD_ID=$(awk -F '\t' 'NF{print $1; exit}' metadata/twitch_vods.txt)
+          download_one() {
+            url="$1"
+            out="$2"
+            success=0
+            for attempt in 1 2 3; do
+              echo "Attempt $attempt: $url"
+              rm -f "$out".*
+              yt-dlp \
+                --proxy 'socks5://127.0.0.1:9050' \
+                --no-playlist --retries 8 --fragment-retries 8 --retry-sleep 2 \
+                --socket-timeout 30 \
+                --extractor-args 'youtube:player_client=web_safari,web_embedded,tv' \
+                -f 'bv*[height<=720]+ba/b[height<=720]' \
+                --merge-output-format mp4 \
+                --write-info-json \
+                -o "$out.%(ext)s" "$url" && success=1 && break
+              echo 'Request failed; asking Tor for a new circuit.'
+              sudo killall -HUP tor || true
+              sleep 8
+            done
+            return $((1-success))
+          }
+
+          ok=0
+          download_one 'https://www.youtube.com/watch?v=EwWbahV3qmU' 'footage/01_genshin_7_1_trailer' && ok=$((ok+1)) || true
+          download_one 'https://www.youtube.com/watch?v=JbrNt_gewBI' 'footage/02_genshin_7_1_events_overview' && ok=$((ok+1)) || true
+          download_one 'https://www.youtube.com/watch?v=fSwBYIeAieo' 'footage/03_genshin_7_1_special_program' && ok=$((ok+1)) || true
+
+          echo "$ok" | tee metadata/download_count.txt
+          find footage -maxdepth 1 -type f -printf '%f %s bytes\n' | tee metadata/files.txt
+          if [ "$ok" -lt 2 ]; then
+            echo "Only $ok official videos downloaded; failing for inspection."
+            exit 1
           fi
-          test -n "$VOD_ID"
-          echo "$VOD_ID" | tee metadata/selected_twitch_vod.txt
-          yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
-            -f 'best[height<=1080]/best' --merge-output-format mp4 \
-            --write-info-json \
-            -o 'footage/01_genshin_7_1_special_program.%(ext)s' \
-            "https://www.twitch.tv/videos/$VOD_ID"
 
-      - name: Try official YouTube trailer and events as extra footage
+      - name: Probe footage and create contact sheets
+        if: always()
         shell: bash
-        continue-on-error: true
         run: |
           set +e
-          try_download() {
-            local url="$1" out="$2"
-            for clients in 'web_safari,web_embedded' 'tv,web_embedded' 'android_vr,web_embedded' ''; do
-              echo "Trying $url with clients: ${clients:-default}"
-              args=(--no-playlist --retries 5 --fragment-retries 5 --retry-sleep 2 --merge-output-format mp4 -f 'bv*[height<=1080]+ba/b[height<=1080]')
-              if [ -n "$clients" ]; then
-                args+=(--extractor-args "youtube:player_client=$clients")
-              fi
-              yt-dlp "${args[@]}" -o "$out.%(ext)s" "$url" && return 0
-              rm -f "$out".*
-            done
-            return 1
-          }
-          try_download 'https://www.youtube.com/watch?v=EwWbahV3qmU' 'footage/02_genshin_7_1_trailer'
-          try_download 'https://www.youtube.com/watch?v=JbrNt_gewBI' 'footage/03_genshin_7_1_events_overview'
-          exit 0
-
-      - name: Build visual index and probe media
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROGRAM=$(find footage -maxdepth 1 -type f -name '01_genshin_7_1_special_program.*' ! -name '*.json' | head -1)
-          test -s "$PROGRAM"
-          ffprobe -v error -show_entries format=duration,size -of json "$PROGRAM" | tee metadata/program_probe.json
-          ffmpeg -hide_banner -loglevel error -y -i "$PROGRAM" \
-            -vf 'fps=1/30,scale=320:-2,tile=5x6' -q:v 3 metadata/program_contact_%02d.jpg
-          ls -lh footage metadata
+          mkdir -p metadata
+          for f in footage/*.mp4 footage/*.webm footage/*.mkv; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            ffprobe -v error -show_entries format=duration,size -of json "$f" > "metadata/${base}.probe.json"
+            ffmpeg -hide_banner -loglevel error -y -i "$f" -vf 'fps=1/20,scale=320:-2,tile=5x6' -frames:v 6 -q:v 4 "metadata/${base}_contact_%02d.jpg"
+          done
+          ls -lh footage metadata || true
 
       - uses: actions/upload-artifact@v4
         if: always()
