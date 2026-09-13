@@ -1,0 +1,39 @@
+name: Fetch Genshin 7.1 official footage
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fetch-genshin-7-1-official-footage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yt-dlp and ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
+          chmod +x /tmp/yt-dlp
+      - name: Download official Genshin 7.1 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p footage
+          common=(--no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 --merge-output-format mp4 --extractor-args "youtube:player_client=android,web")
+          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/01_genshin_7_1_special_program.%(ext)s" "https://www.youtube.com/watch?v=fSwBYIeAieo"
+          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/02_genshin_7_1_trailer.%(ext)s" "https://www.youtube.com/watch?v=EwWbahV3qmU"
+          /tmp/yt-dlp "${common[@]}" -f "bv*[height<=1080]+ba/b[height<=1080]" -o "footage/03_genshin_7_1_events_overview.%(ext)s" "https://www.youtube.com/watch?v=JbrNt_gewBI"
+          ls -lh footage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genshin-7-1-official-footage
+          path: footage/*
+          retention-days: 7
+          compression-level: 0
