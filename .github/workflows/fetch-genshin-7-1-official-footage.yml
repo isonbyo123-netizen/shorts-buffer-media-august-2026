@@ -27,9 +27,10 @@ jobs:
           mkdir -p footage metadata
           python - <<'PY'
           import json, requests, subprocess, os, uuid
+          ua='Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36'
           s=requests.Session()
           s.cookies.set('buvid3', str(uuid.uuid4()).upper()+'infoc')
-          s.headers.update({'User-Agent':'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36','Referer':'https://www.bilibili.com/','Accept':'*/*'})
+          s.headers.update({'User-Agent':ua,'Referer':'https://www.bilibili.com/','Accept':'*/*'})
           items={
             'pv': {'bvid':'BV1yuY96rEL7','cid':41822257268,'out':'footage/01_genshin_7_1_pv_en','qn':64},
             'program': {'bvid':'BV1znY96NEvn','cid':41822653754,'out':'footage/02_genshin_7_1_special_program','qn':32}
@@ -46,23 +47,24 @@ jobs:
             for i,e in enumerate(data['data']['durl']):
               urls=[e['url']] + (e.get('backup_url') or [])
               part=f"{x['out']}_part{i:02d}.media"
+              ok=False
               for url in urls:
+                cmd=['curl','-L','--fail','--retry','20','--retry-delay','1','--retry-all-errors','--connect-timeout','20','--max-time','900','-C','-','-A',ua,'-e','https://www.bilibili.com/','-o',part,url]
+                print(key,'curl',i,'expected',e.get('size'))
                 try:
-                  vr=s.get(url,headers={'Referer':'https://www.bilibili.com/'},stream=True,timeout=120)
-                  print(key,'cdn',i,vr.status_code,vr.headers.get('content-length'),vr.headers.get('content-type'))
-                  if vr.status_code not in (200,206): continue
-                  with open(part,'wb') as f:
-                    for chunk in vr.iter_content(1024*1024):
-                      if chunk: f.write(chunk)
-                  break
-                except Exception as ex: print('cdn error',repr(ex))
-              else: raise RuntimeError('all cdn urls failed')
+                  subprocess.run(cmd,check=True)
+                  if e.get('size') and os.path.getsize(part) < int(e['size'])*0.98:
+                    raise RuntimeError(f'incomplete file {os.path.getsize(part)}/{e["size"]}')
+                  ok=True; break
+                except Exception as ex:
+                  print('curl failed',repr(ex))
+              if not ok: raise RuntimeError('all cdn urls failed')
               parts.append(part)
             concat=x['out']+'_concat.txt'
             with open(concat,'w') as f:
               for pth in parts: f.write("file '%s'\n"%os.path.abspath(pth))
             subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',concat,'-c','copy',x['out']+'.mp4'],check=True)
-            meta[key]={'bvid':x['bvid'],'cid':x['cid'],'quality':data['data'].get('quality'),'format':data['data'].get('format')}
+            meta[key]={'bvid':x['bvid'],'cid':x['cid'],'quality':data['data'].get('quality'),'format':data['data'].get('format'),'bytes':sum(os.path.getsize(p) for p in parts)}
           with open('metadata/resolved.json','w') as f: json.dump(meta,f,indent=2)
           PY
           rm -f footage/*_part*.media footage/*_concat.txt
