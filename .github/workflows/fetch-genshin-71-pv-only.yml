@@ -1,0 +1,32 @@
+name: Fetch Genshin 7.1 PV only
+on:
+  push:
+    paths:
+      - ".github/workflows/fetch-genshin-71-pv-only.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve and download official English PV
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p footage
+          UA='Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36'
+          JSON=$(curl -sS --retry 5 --retry-all-errors -A "$UA" -e 'https://www.bilibili.com/' 'https://api.bilibili.com/x/player/playurl?bvid=BV1yuY96rEL7&cid=41822257268&qn=64&fnval=0&fnver=0&fourk=0&platform=html5&high_quality=1')
+          URL=$(python -c 'import json,sys; print(json.load(sys.stdin)["data"]["durl"][0]["url"])' <<< "$JSON")
+          SIZE=$(python -c 'import json,sys; print(json.load(sys.stdin)["data"]["durl"][0]["size"])' <<< "$JSON")
+          echo "Expected bytes: $SIZE"
+          curl -L --fail --retry 30 --retry-delay 1 --retry-all-errors --connect-timeout 20 --max-time 1200 -C - -A "$UA" -e 'https://www.bilibili.com/' -o footage/genshin_7_1_pv_en.mp4 "$URL"
+          test $(stat -c%s footage/genshin_7_1_pv_en.mp4) -ge $((SIZE*98/100))
+          ls -lh footage/genshin_7_1_pv_en.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genshin-7-1-pv-en
+          path: footage/genshin_7_1_pv_en.mp4
+          retention-days: 7
+          compression-level: 0
