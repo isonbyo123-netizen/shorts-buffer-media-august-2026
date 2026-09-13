@@ -15,61 +15,73 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install tools
+
+      - name: Install yt-dlp and ffmpeg
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          python -m pip install --quiet requests
-      - name: Download exact official sources
+          python -m pip install --upgrade --quiet "yt-dlp[default,curl-cffi]"
+          yt-dlp --version
+
+      - name: Find latest official Genshin Twitch broadcasts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p footage metadata
-          python - <<'PY'
-          import json, requests, subprocess, os, uuid
-          ua='Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36'
-          s=requests.Session()
-          s.cookies.set('buvid3', str(uuid.uuid4()).upper()+'infoc')
-          s.headers.update({'User-Agent':ua,'Referer':'https://www.bilibili.com/','Accept':'*/*'})
-          items={
-            'pv': {'bvid':'BV1yuY96rEL7','cid':41822257268,'out':'footage/01_genshin_7_1_pv_en','qn':64},
-            'program': {'bvid':'BV1znY96NEvn','cid':41822653754,'out':'footage/02_genshin_7_1_special_program','qn':32}
+          URL='https://www.twitch.tv/genshinimpactofficial/videos?filter=archives&sort=time'
+          yt-dlp --flat-playlist --playlist-end 20 \
+            --print '%(id)s\t%(title)s\t%(webpage_url)s' "$URL" | tee metadata/twitch_vods.txt
+
+      - name: Download Version 7.1 Special Program from official Twitch
+        shell: bash
+        run: |
+          set -euo pipefail
+          VOD_ID=$(awk -F '\t' 'BEGIN{IGNORECASE=1} /7\.1|Rekviem|Underworld|Special Program/{print $1; exit}' metadata/twitch_vods.txt || true)
+          if [ -z "$VOD_ID" ]; then
+            echo 'No title match found; using newest archive from official Genshin Twitch channel.'
+            VOD_ID=$(awk -F '\t' 'NF{print $1; exit}' metadata/twitch_vods.txt)
+          fi
+          test -n "$VOD_ID"
+          echo "$VOD_ID" | tee metadata/selected_twitch_vod.txt
+          yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
+            -f 'best[height<=1080]/best' --merge-output-format mp4 \
+            --write-info-json \
+            -o 'footage/01_genshin_7_1_special_program.%(ext)s' \
+            "https://www.twitch.tv/videos/$VOD_ID"
+
+      - name: Try official YouTube trailer and events as extra footage
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          try_download() {
+            local url="$1" out="$2"
+            for clients in 'web_safari,web_embedded' 'tv,web_embedded' 'android_vr,web_embedded' ''; do
+              echo "Trying $url with clients: ${clients:-default}"
+              args=(--no-playlist --retries 5 --fragment-retries 5 --retry-sleep 2 --merge-output-format mp4 -f 'bv*[height<=1080]+ba/b[height<=1080]')
+              if [ -n "$clients" ]; then
+                args+=(--extractor-args "youtube:player_client=$clients")
+              fi
+              yt-dlp "${args[@]}" -o "$out.%(ext)s" "$url" && return 0
+              rm -f "$out".*
+            done
+            return 1
           }
-          meta={}
-          for key,x in items.items():
-            p={'bvid':x['bvid'],'cid':x['cid'],'qn':x['qn'],'fnval':0,'fnver':0,'fourk':0,'platform':'html5','high_quality':1}
-            r=s.get('https://api.bilibili.com/x/player/playurl',params=p,timeout=30)
-            print(key,'playurl',r.status_code,r.text[:500])
-            r.raise_for_status(); data=r.json()
-            if data.get('code')!=0 or not data.get('data',{}).get('durl'):
-              raise RuntimeError(data)
-            parts=[]
-            for i,e in enumerate(data['data']['durl']):
-              urls=[e['url']] + (e.get('backup_url') or [])
-              part=f"{x['out']}_part{i:02d}.media"
-              ok=False
-              for url in urls:
-                cmd=['curl','-L','--fail','--retry','20','--retry-delay','1','--retry-all-errors','--connect-timeout','20','--max-time','900','-C','-','-A',ua,'-e','https://www.bilibili.com/','-o',part,url]
-                print(key,'curl',i,'expected',e.get('size'))
-                try:
-                  subprocess.run(cmd,check=True)
-                  if e.get('size') and os.path.getsize(part) < int(e['size'])*0.98:
-                    raise RuntimeError(f'incomplete file {os.path.getsize(part)}/{e["size"]}')
-                  ok=True; break
-                except Exception as ex:
-                  print('curl failed',repr(ex))
-              if not ok: raise RuntimeError('all cdn urls failed')
-              parts.append(part)
-            concat=x['out']+'_concat.txt'
-            with open(concat,'w') as f:
-              for pth in parts: f.write("file '%s'\n"%os.path.abspath(pth))
-            subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',concat,'-c','copy',x['out']+'.mp4'],check=True)
-            meta[key]={'bvid':x['bvid'],'cid':x['cid'],'quality':data['data'].get('quality'),'format':data['data'].get('format'),'bytes':sum(os.path.getsize(p) for p in parts)}
-          with open('metadata/resolved.json','w') as f: json.dump(meta,f,indent=2)
-          PY
-          rm -f footage/*_part*.media footage/*_concat.txt
-          ffmpeg -hide_banner -loglevel error -y -i footage/02_genshin_7_1_special_program.mp4 -vf "fps=1/30,scale=320:-2,tile=5x6" -q:v 3 metadata/program_contact_%02d.jpg
+          try_download 'https://www.youtube.com/watch?v=EwWbahV3qmU' 'footage/02_genshin_7_1_trailer'
+          try_download 'https://www.youtube.com/watch?v=JbrNt_gewBI' 'footage/03_genshin_7_1_events_overview'
+          exit 0
+
+      - name: Build visual index and probe media
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROGRAM=$(find footage -maxdepth 1 -type f -name '01_genshin_7_1_special_program.*' ! -name '*.json' | head -1)
+          test -s "$PROGRAM"
+          ffprobe -v error -show_entries format=duration,size -of json "$PROGRAM" | tee metadata/program_probe.json
+          ffmpeg -hide_banner -loglevel error -y -i "$PROGRAM" \
+            -vf 'fps=1/30,scale=320:-2,tile=5x6' -q:v 3 metadata/program_contact_%02d.jpg
           ls -lh footage metadata
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
