@@ -11,39 +11,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Resolve and download official English PV in chunks
+      - name: Resolve and download official English PV in parallel chunks
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p footage
+          mkdir -p footage/chunks
           python - <<'PY'
           import requests, os, time, uuid
+          from concurrent.futures import ThreadPoolExecutor, as_completed
           ua='Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/152 Mobile Safari/537.36'
           s=requests.Session(); s.cookies.set('buvid3',str(uuid.uuid4()).upper()+'infoc')
           s.headers.update({'User-Agent':ua,'Referer':'https://www.bilibili.com/','Accept':'*/*'})
           p={'bvid':'BV1yuY96rEL7','cid':41822257268,'qn':64,'fnval':0,'fnver':0,'fourk':0,'platform':'html5','high_quality':1}
           data=s.get('https://api.bilibili.com/x/player/playurl',params=p,timeout=30).json()['data']['durl'][0]
-          url=data['url']; total=int(data['size']); out='footage/genshin_7_1_pv_en.mp4'; chunk=2*1024*1024
-          print('total',total)
-          with open(out,'wb') as f:
-            for start in range(0,total,chunk):
-              end=min(total-1,start+chunk-1); expected=end-start+1
-              for attempt in range(1,16):
-                try:
-                  r=s.get(url,headers={'Range':f'bytes={start}-{end}','Referer':'https://www.bilibili.com/'},timeout=60)
-                  b=r.content
-                  print(start,end,'attempt',attempt,'status',r.status_code,'bytes',len(b),r.headers.get('content-range'))
-                  if r.status_code==206 and len(b)==expected:
-                    f.write(b); f.flush(); break
-                  if r.status_code==200 and start==0 and len(b)>=total:
-                    f.seek(0); f.write(b[:total]); f.truncate(total); start=total; break
-                  raise RuntimeError(f'bad range response {r.status_code} {len(b)}/{expected}')
-                except Exception as e:
-                  print('retry',repr(e)); time.sleep(min(attempt,5))
-              else: raise RuntimeError(f'failed range {start}-{end}')
+          url=data['url']; total=int(data['size']); chunk=1024*1024
+          ranges=[(i,start,min(total-1,start+chunk-1)) for i,start in enumerate(range(0,total,chunk))]
+          print('total',total,'chunks',len(ranges))
+          def one(item):
+            i,start,end=item; expected=end-start+1; path=f'footage/chunks/{i:04d}.bin'
+            for attempt in range(1,11):
+              try:
+                ss=requests.Session(); ss.headers.update({'User-Agent':ua,'Referer':'https://www.bilibili.com/','Accept':'*/*','Range':f'bytes={start}-{end}'})
+                r=ss.get(url,timeout=30); b=r.content
+                if r.status_code==206 and len(b)==expected:
+                  open(path,'wb').write(b); print('ok',i,start,end); return path
+                raise RuntimeError(f'status={r.status_code} bytes={len(b)}/{expected} range={r.headers.get("content-range")}')
+              except Exception as e:
+                print('retry',i,attempt,repr(e)); time.sleep(min(attempt,3))
+            raise RuntimeError(f'failed chunk {i}')
+          with ThreadPoolExecutor(max_workers=8) as ex:
+            futures=[ex.submit(one,x) for x in ranges]
+            for f in as_completed(futures): f.result()
+          out='footage/genshin_7_1_pv_en.mp4'
+          with open(out,'wb') as dst:
+            for i,_,_ in ranges:
+              with open(f'footage/chunks/{i:04d}.bin','rb') as src: dst.write(src.read())
           if os.path.getsize(out)!=total: raise RuntimeError(f'size mismatch {os.path.getsize(out)} != {total}')
           print('complete',os.path.getsize(out))
           PY
+          rm -rf footage/chunks
           ls -lh footage/genshin_7_1_pv_en.mp4
       - uses: actions/upload-artifact@v4
         with:
