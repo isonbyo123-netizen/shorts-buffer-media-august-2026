@@ -44,7 +44,7 @@ jobs:
               raise RuntimeError(data)
             parts=[]
             for i,e in enumerate(data['data']['durl']):
-              urls=[e['url']]+e.get('backup_url',[])
+              urls=[e['url']] + (e.get('backup_url') or [])
               part=f"{x['out']}_part{i:02d}.media"
               for url in urls:
                 try:
