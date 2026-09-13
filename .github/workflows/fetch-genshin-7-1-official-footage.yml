@@ -21,22 +21,22 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg jq
           python -m pip install --quiet requests
-          curl -L --fail https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /tmp/yt-dlp
-          chmod +x /tmp/yt-dlp
 
-      - name: Resolve official Bilibili video IDs
+      - name: Resolve and download official Bilibili videos through API
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p footage metadata
           python - <<'PY'
-          import json, re, requests, sys
-          from urllib.parse import quote
+          import json, re, requests, sys, subprocess, os
 
-          headers = {
+          s = requests.Session()
+          s.headers.update({
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36',
-              'Referer': 'https://www.bilibili.com/'
-          }
+              'Referer': 'https://www.bilibili.com/',
+              'Origin': 'https://www.bilibili.com',
+              'Accept': '*/*'
+          })
 
           wanted = {
               'pv': ['7.1版本PV', '往冥府的安魂歌'],
@@ -44,77 +44,79 @@ jobs:
           }
           found = {}
 
-          # First try Bilibili's public popular list; both official 7.1 uploads are currently trending.
           for pn in range(1, 4):
-              try:
-                  r = requests.get('https://api.bilibili.com/x/web-interface/popular', params={'pn':pn,'ps':50}, headers=headers, timeout=20)
-                  print('popular', pn, r.status_code)
-                  data = r.json()
-                  for v in data.get('data',{}).get('list',[]):
-                      title = re.sub('<.*?>','', v.get('title',''))
-                      owner = (v.get('owner') or {}).get('name','')
-                      bvid = v.get('bvid')
-                      print('CANDIDATE', owner, bvid, title)
-                      if owner == '原神' and bvid:
-                          for key, needles in wanted.items():
-                              if key not in found and all(n in title for n in needles):
-                                  found[key] = {'bvid': bvid, 'title': title, 'owner': owner}
-              except Exception as e:
-                  print('popular error', repr(e))
-
-          # Fallback to Bilibili search API for anything not found.
-          queries = {
-              'pv':'《原神》7.1版本PV 往冥府的安魂歌',
-              'program':'《原神》7.1版本 往冥府的安魂歌 前瞻特别节目'
-          }
-          for key, q in queries.items():
-              if key in found:
-                  continue
-              try:
-                  r = requests.get('https://api.bilibili.com/x/web-interface/search/type', params={'search_type':'video','keyword':q,'page':1}, headers=headers, timeout=20)
-                  print('search', key, r.status_code)
-                  data = r.json()
-                  for v in data.get('data',{}).get('result',[]) or []:
-                      title = re.sub('<.*?>','', v.get('title',''))
-                      owner = v.get('author','')
-                      bvid = v.get('bvid')
-                      print('SEARCH_RESULT', owner, bvid, title)
-                      if bvid and owner == '原神' and all(n in title for n in wanted[key]):
-                          found[key] = {'bvid': bvid, 'title': title, 'owner': owner}
-                          break
-              except Exception as e:
-                  print('search error', key, repr(e))
+              r = s.get('https://api.bilibili.com/x/web-interface/popular', params={'pn':pn,'ps':50}, timeout=20)
+              r.raise_for_status()
+              for v in r.json().get('data',{}).get('list',[]):
+                  title = re.sub('<.*?>','', v.get('title',''))
+                  owner = (v.get('owner') or {}).get('name','')
+                  bvid = v.get('bvid')
+                  if owner == '原神' and bvid:
+                      for key, needles in wanted.items():
+                          if key not in found and all(n in title for n in needles):
+                              found[key] = {'bvid': bvid, 'title': title, 'owner': owner}
 
           print('FOUND', json.dumps(found, ensure_ascii=False, indent=2))
-          with open('metadata/resolved.json','w',encoding='utf-8') as f:
-              json.dump(found,f,ensure_ascii=False,indent=2)
           if not all(k in found for k in wanted):
-              sys.exit('Could not resolve both official 7.1 Bilibili uploads')
+              sys.exit('Could not resolve both official Bilibili uploads')
+
+          def get_cid(bvid):
+              r = s.get('https://api.bilibili.com/x/web-interface/view', params={'bvid': bvid}, timeout=20)
+              print('view', bvid, r.status_code, r.text[:200])
+              r.raise_for_status()
+              data = r.json()
+              if data.get('code') != 0:
+                  raise RuntimeError(data)
+              return data['data']['cid']
+
+          def download_public_mp4(bvid, outbase, qn):
+              cid = get_cid(bvid)
+              params = {
+                  'bvid': bvid,
+                  'cid': cid,
+                  'qn': qn,
+                  'fnval': 0,
+                  'fnver': 0,
+                  'fourk': 0,
+                  'platform': 'html5',
+                  'high_quality': 1,
+              }
+              r = s.get('https://api.bilibili.com/x/player/playurl', params=params, timeout=20)
+              print('playurl', bvid, r.status_code, r.text[:300])
+              r.raise_for_status()
+              data = r.json()
+              if data.get('code') != 0:
+                  raise RuntimeError(data)
+              durls = data['data'].get('durl') or []
+              if not durls:
+                  raise RuntimeError('No progressive MP4 URL returned')
+              parts=[]
+              for i, entry in enumerate(durls):
+                  url = entry['url']
+                  part = f'{outbase}_part{i:02d}.flv'
+                  with s.get(url, headers={'Referer':'https://www.bilibili.com/'}, stream=True, timeout=60) as vr:
+                      print('video', i, vr.status_code, vr.headers.get('content-type'), vr.headers.get('content-length'))
+                      vr.raise_for_status()
+                      with open(part,'wb') as f:
+                          for chunk in vr.iter_content(1024*1024):
+                              if chunk: f.write(chunk)
+                  parts.append(part)
+              concat = f'{outbase}_concat.txt'
+              with open(concat,'w') as f:
+                  for p in parts:
+                      f.write("file '%s'\n" % os.path.abspath(p).replace("'", "'\\''"))
+              subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',concat,'-c','copy',outbase+'.mp4'],check=True)
+              return {'bvid':bvid,'cid':cid,'parts':len(parts),'quality':data['data'].get('quality'),'format':data['data'].get('format')}
+
+          meta={}
+          meta['pv']=download_public_mp4(found['pv']['bvid'],'footage/01_genshin_7_1_pv',64)
+          meta['program']=download_public_mp4(found['program']['bvid'],'footage/02_genshin_7_1_special_program',64)
+          with open('metadata/resolved.json','w',encoding='utf-8') as f:
+              json.dump({'found':found,'download':meta},f,ensure_ascii=False,indent=2)
           PY
 
-      - name: Download official footage
-        shell: bash
-        run: |
-          set -euo pipefail
-          PV=$(jq -r '.pv.bvid' metadata/resolved.json)
-          PROGRAM=$(jq -r '.program.bvid' metadata/resolved.json)
-          echo "PV=$PV PROGRAM=$PROGRAM"
-
-          # Trailer at the best public quality up to 1080p.
-          /tmp/yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
-            --merge-output-format mp4 --write-info-json \
-            -f "bv*[height<=1080]+ba/b[height<=1080]/best" \
-            -o "footage/01_genshin_7_1_pv.%(ext)s" "https://www.bilibili.com/video/$PV"
-
-          # Full Special Program at up to 720p: enough for vertical crops and much smaller than 1080p.
-          /tmp/yt-dlp --no-playlist --retries 10 --fragment-retries 10 --retry-sleep 3 \
-            --merge-output-format mp4 --write-info-json \
-            -f "bv*[height<=720]+ba/b[height<=720]/best" \
-            -o "footage/02_genshin_7_1_special_program.%(ext)s" "https://www.bilibili.com/video/$PROGRAM"
-
-          # Build a visual index of the program so we can identify the exact character/reward sections quickly.
-          PROGRAM_FILE=$(find footage -maxdepth 1 -type f -name '02_genshin_7_1_special_program.*' ! -name '*.json' | head -1)
-          ffmpeg -hide_banner -loglevel error -y -i "$PROGRAM_FILE" \
+          rm -f footage/*_part*.flv footage/*_concat.txt
+          ffmpeg -hide_banner -loglevel error -y -i footage/02_genshin_7_1_special_program.mp4 \
             -vf "fps=1/30,scale=320:-2,tile=5x6" -q:v 3 metadata/program_contact_%02d.jpg
           ls -lh footage metadata
 
